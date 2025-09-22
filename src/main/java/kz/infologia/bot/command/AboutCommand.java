@@ -12,7 +12,7 @@ public class AboutCommand extends BaseCommand {
     public void execute(AbsSender absSender, Update update) {
         long chatId = update.getMessage().getChatId();
         
-        String aboutMessage = "aboutInfoLogia";
+        String aboutMessage = "SALEM ALEM";
         
         sendMessage(absSender, chatId, aboutMessage, true);
     }

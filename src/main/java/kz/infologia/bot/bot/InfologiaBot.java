@@ -1,9 +1,11 @@
 package kz.infologia.bot.bot;
 
-import kz.infologia.bot.command.*;
+import kz.infologia.bot.command.AboutCommand;
+import kz.infologia.bot.command.ProfileCommand;
+import kz.infologia.bot.command.QuoteCommand;
 import kz.infologia.bot.config.BotConfig;
-import kz.infologia.bot.model.User;
 import kz.infologia.bot.service.UserService;
+import kz.infologia.bot.service.dto.AuthResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -17,10 +19,13 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 @RequiredArgsConstructor
 public class InfologiaBot extends TelegramLongPollingBot {
 
+    private static final int LOG_PREVIEW_LENGTH = 80;
+
     private final BotConfig botConfig;
     private final UserService userService;
     private final AboutCommand aboutCommand;
     private final QuoteCommand quoteCommand;
+    private final ProfileCommand profileCommand;
 
     @Override
     public String getBotUsername() {
@@ -34,77 +39,187 @@ public class InfologiaBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        if (update.hasMessage() && update.getMessage().hasText()) {
-            String messageText = update.getMessage().getText();
-            long chatId = update.getMessage().getChatId();
-            String firstName = update.getMessage().getFrom().getFirstName();
+        if (!update.hasMessage() || !update.getMessage().hasText()) {
+            return;
+        }
 
-            // Сохраняем или обновляем информацию о пользователе
-            User user = userService.saveOrUpdateUser(update.getMessage().getFrom());
+        String messageText = update.getMessage().getText().trim();
+        long chatId = update.getMessage().getChatId();
+        long telegramId = update.getMessage().getFrom().getId();
+        String firstName = update.getMessage().getFrom().getFirstName();
 
-            log.info("Получено сообщение от {} (ID: {}): {}", firstName, user.getTelegramId(), messageText);
+        userService.saveOrUpdateUser(update.getMessage().getFrom());
 
-            // Обработка команд
-            if (messageText.startsWith("/")) {
-                handleCommand(chatId, messageText, update);
-            } else {
-                // Обработка обычных сообщений
-                sendMessage(chatId, "Привет! 👋\n\n" +
-                        "Я получил твое сообщение: \"" + messageText + "\"\n\n" +
-                        "Используй /help для просмотра всех доступных команд!\n" +
-                        "Удачи в подготовке к ЕНТ! 🎓");
-            }
+        log.info("Incoming message from {} ({}): {}", firstName, telegramId, preview(messageText));
+
+        if (messageText.startsWith("/")) {
+            handleCommand(chatId, telegramId, messageText, update);
+        } else {
+            handlePlainText(chatId, telegramId);
         }
     }
 
-    private void handleCommand(long chatId, String messageText, Update update) {
-        String command = messageText.split(" ")[0].toLowerCase();
-        
+    private void handlePlainText(long chatId, long telegramId) {
+        if (userService.isAuthorized(telegramId)) {
+            sendMessage(chatId, "Your message has been received. Use /help to see available commands.");
+        } else {
+            sendMessage(chatId, unauthorizedMessage(), true);
+        }
+    }
+
+    private void handleCommand(long chatId, long telegramId, String messageText, Update update) {
+        String[] parts = messageText.split("\\s+", 2);
+        String command = parts[0].toLowerCase();
+
         switch (command) {
             case "/start":
-                sendMessage(chatId, "startFIXME", true);
+                sendMessage(chatId, startMessage(), true);
                 break;
-                
             case "/help":
-                sendMessage(chatId, "helpFIXME", true);
+                sendMessage(chatId, helpMessage(), true);
                 break;
-                
+            case "/register":
+                handleRegister(chatId, telegramId, parts);
+                break;
+            case "/login":
+                handleLogin(chatId, telegramId, parts);
+                break;
+            case "/logout":
+                handleLogout(chatId, telegramId);
+                break;
+            case "/status":
+                sendMessage(chatId, statusMessage(telegramId), true);
+                break;
             case "/about":
                 aboutCommand.execute(this, update);
                 break;
-                
             case "/quote":
-                quoteCommand.execute(this, update);
+                if (ensureAuthorized(chatId, telegramId)) {
+                    quoteCommand.execute(this, update);
+                }
                 break;
-                
             case "/info":
-                sendMessage(chatId, "infoFIXME", true);
+                if (ensureAuthorized(chatId, telegramId)) {
+                    sendMessage(chatId, infoMessage(telegramId), true);
+                }
                 break;
-                
+            case "/profile":
+                if (ensureAuthorized(chatId, telegramId)) {
+                    profileCommand.execute(this, update);
+                }
+                break;
             default:
-                sendMessage(chatId, "defaultFIXME", true);
+                if (ensureAuthorized(chatId, telegramId)) {
+                    sendMessage(chatId, "Unknown command. Use /help to see the list of available commands.");
+                }
                 break;
         }
+    }
+
+    private void handleRegister(long chatId, long telegramId, String[] parts) {
+        if (parts.length < 2 || parts[1].isBlank()) {
+            sendMessage(chatId, "Usage: /register <password>");
+            return;
+        }
+
+        AuthResult result = userService.registerUser(telegramId, parts[1].trim());
+        sendMessage(chatId, result.message(), !result.success());
+    }
+
+    private void handleLogin(long chatId, long telegramId, String[] parts) {
+        if (parts.length < 2 || parts[1].isBlank()) {
+            sendMessage(chatId, "Usage: /login <password>");
+            return;
+        }
+
+        AuthResult result = userService.authenticateUser(telegramId, parts[1].trim());
+        sendMessage(chatId, result.message(), !result.success());
+    }
+
+    private void handleLogout(long chatId, long telegramId) {
+        AuthResult result = userService.logout(telegramId);
+        sendMessage(chatId, result.message(), !result.success());
+    }
+
+    private boolean ensureAuthorized(long chatId, long telegramId) {
+        if (userService.isAuthorized(telegramId)) {
+            return true;
+        }
+
+        sendMessage(chatId, unauthorizedMessage(), true);
+        return false;
+    }
+
+    private String unauthorizedMessage() {
+        return "*Authorization required*\n" +
+                "Register with `/register <password>` or login with `/login <password>` to continue.";
+    }
+
+    private String startMessage() {
+        return "*Welcome to Infologia Bot!*\n" +
+                "Use `/register <password>` to create an account or `/login <password>` if you already have one.";
+    }
+
+    private String helpMessage() {
+        return "*Available commands*\n" +
+                "/start - introduction\n" +
+                "/register <password> - register and log in\n" +
+                "/login <password> - log in\n" +
+                "/logout - log out\n" +
+                "/status - show your authentication status\n" +
+                "/about - learn about the bot\n" +
+                "/quote - get a protected quote\n" +
+                "/profile [telegram_id] - show your student profile (curators/admins can pass ID)\n" +
+                "/info - show stored profile information";
+    }
+
+    private String statusMessage(long telegramId) {
+        boolean authorized = userService.isAuthorized(telegramId);
+        String role = userService.getRole(telegramId).name();
+        return "*Status:* " + (authorized ? "authorized" : "guest") + "\n" +
+                "*Role:* " + role;
+    }
+
+    private String infoMessage(long telegramId) {
+        return userService.findByTelegramId(telegramId)
+                .map(user -> "*Telegram ID:* " + user.getTelegramId() + "\n" +
+                        "*Username:* " + valueOrPlaceholder(user.getUsername()) + "\n" +
+                        "*First name:* " + valueOrPlaceholder(user.getFirstName()) + "\n" +
+                        "*Last name:* " + valueOrPlaceholder(user.getLastName()) + "\n" +
+                        "*Language:* " + valueOrPlaceholder(user.getLanguageCode()) + "\n" +
+                        "*Role:* " + user.getRole())
+                .orElse("User profile not found.");
+    }
+
+    private String valueOrPlaceholder(String value) {
+        return value == null || value.isBlank() ? "n/a" : value;
     }
 
     private void sendMessage(long chatId, String text) {
         sendMessage(chatId, text, false);
     }
-    
+
     private void sendMessage(long chatId, String text, boolean markdown) {
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(text);
-        
+
         if (markdown) {
             message.setParseMode("Markdown");
         }
 
         try {
             execute(message);
-            log.info("Отправлено сообщение в чат {}: {}", chatId, text.substring(0, Math.min(50, text.length())));
+            log.info("Sent message to chat {}: {}", chatId, preview(text));
         } catch (TelegramApiException e) {
-            log.error("Ошибка при отправке сообщения: {}", e.getMessage());
+            log.error("Failed to send message: {}", e.getMessage());
         }
+    }
+
+    private String preview(String text) {
+        if (text.length() <= LOG_PREVIEW_LENGTH) {
+            return text;
+        }
+        return text.substring(0, LOG_PREVIEW_LENGTH) + "...";
     }
 }

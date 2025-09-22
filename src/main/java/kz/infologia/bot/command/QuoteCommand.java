@@ -26,5 +26,4 @@ public class QuoteCommand extends BaseCommand {
         
         sendMessage(absSender, chatId, message, true);
     }
-
 }
