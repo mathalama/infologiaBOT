@@ -7,13 +7,18 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.MapsId;
 import jakarta.persistence.OneToOne;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.Builder.Default;
+import org.springframework.data.domain.Persistable;
 
 import java.time.LocalDateTime;
 
@@ -23,7 +28,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class StudentProfile {
+public class StudentProfile implements Persistable<Long> {
 
     @Id
     @Column(name = "telegram_id")
@@ -52,9 +57,29 @@ public class StudentProfile {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    @Transient
+    @Default
+    private boolean isNew = true;
+
     @PrePersist
     @PreUpdate
-    protected void onUpdate() {
+    protected void onWrite() {
         updatedAt = LocalDateTime.now();
+    }
+
+    @PostPersist
+    @PostLoad
+    protected void markNotNew() {
+        this.isNew = false;
+    }
+
+    @Override
+    public Long getId() {
+        return telegramId;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
     }
 }
